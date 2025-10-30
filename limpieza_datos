@@ -1,0 +1,62 @@
+1. Importación de librerías
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, avg, count, when
+
+
+SparkSession: Es el punto de entrada principal para trabajar con DataFrames en Spark.
+
+col, avg, count, when: Son funciones útiles para manipular columnas, calcular promedios, contar filas y hacer condiciones.
+
+
+# Crear la sesión de Spark
+spark = SparkSession.builder.appName("TitanicBatchProcessing").getOrCreate()
+
+Crea una sesión de Spark llamada TitanicBatchProcessing.
+Esto permite usar los recursos de Spark para procesar datos en paralelo (incluso en clúster si estuviera configurado).
+
+# Cargar el dataset CSV
+data_path = "/home/vboxuser/titanic.csv"
+df = spark.read.csv(data_path, header=True, inferSchema=True)
+
+print("Datos cargados correctamente:")
+df.show(5)
+df.printSchema()
+
+# Limpieza básica
+df_clean = df.dropna(subset=["Age", "Fare", "Embarked", "Sex", "Survived"])
+
+Elimina todas las filas que tengan valores nulos en esas columnas clave.
+Esto deja solo los registros completos, lo que mejora la calidad del análisis.
+
+# Transformación: convertir columnas categóricas a minúsculas
+df_clean = df_clean.withColumn("Sex", col("Sex").cast("string"))
+df_clean = df_clean.withColumn("Embarked", col("Embarked").cast("string"))
+
+Asegura que las columnas Sex y Embarked sean de tipo texto (string).
+En este caso no cambia el contenido, solo garantiza el tipo correcto.
+
+# Análisis exploratorio
+print("🔹 Total de pasajeros:")
+print(df_clean.count())
+
+print("🔹 Promedio de edad por clase:")
+df_clean.groupBy("Pclass").agg(avg("Age").alias("Promedio_Edad")).show()
+
+Cuenta el número total de filas después de la limpieza.
+
+print("🔹 Tasa de supervivencia por género:")
+df_clean.groupBy("Sex").agg(avg(col("Survived").cast("float")).alias("Tasa_Supervivencia")).show()
+
+print("🔹 Conteo de pasajeros por puerto de embarque:")
+df_clean.groupBy("Embarked").agg(count("*").alias("Total")).show()
+
+# Guardar los resultados procesados en formato Parquet
+output_path = "/home/vboxuser/titanic_processed"
+df_clean.write.mode("overwrite").parquet(output_path)
+
+Guarda el DataFrame limpio en formato Parquet, que es más eficiente que CSV (mejor compresión y lectura más rápida).
+
+print(f" Datos procesados y guardados en: {output_path}")
+
+spark.stop()
+Cierra la sesión y libera los recursos utilizados por Spark.
