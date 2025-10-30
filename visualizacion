@@ -1,0 +1,83 @@
+Este programa convierte los registros del Titanic en un flujo visual en tiempo real, usando Kafka para transmitir, Spark para procesar y Plotly para mostrar estadísticas dinámicas (sobrevivientes, géneros y edades promedio por clase) de manera automática y continua.
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, from_json, schema_of_json
+import plotly.express as px
+import pandas as pd
+import threading
+import time
+
+# -------------------------------
+# Crear SparkSession
+# -------------------------------
+spark = SparkSession.builder \
+    .appName("TitanicStreamingVisual") \
+    .getOrCreate()
+
+# -------------------------------
+# Leer datos desde Kafka
+# -------------------------------
+df_stream = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "localhost:9092") \
+    .option("subscribe", "titanic_stream") \
+    .load()
+
+# Convertir value a string
+df_string = df_stream.selectExpr("CAST(value AS STRING) as json_str")
+
+# -------------------------------
+# Inferir esquema JSON
+# -------------------------------
+example_json = """{
+"PassengerId": "1", "Survived": "0", "Pclass": "3", 
+"Name": "Braund, Mr. Owen Harris", "Sex": "male", "Age": "22"
+}"""
+schema = schema_of_json(example_json)
+
+# Parsear JSON
+df_parsed = df_string.select(from_json(col("json_str"), schema).alias("data")).select("data.*")
+
+# Cambiar tipos
+df_parsed = df_parsed.withColumn("Survived", col("Survived").cast("integer")) \
+                     .withColumn("Age", col("Age").cast("double"))
+
+# -------------------------------
+# Función para mostrar gráficos con Plotly
+# -------------------------------
+def plot_realtime():
+    while True:
+        pdf = df_parsed.toPandas()
+        if not pdf.empty:
+            # 1️⃣ Conteo de sobrevivientes
+            fig1 = px.bar(
+                pdf.groupby("Survived").size().reset_index(name="count"),
+                x="Survived", y="count",
+                title="Conteo de sobrevivientes"
+            )
+            fig1.show()
+
+            # 2️⃣ Distribución por género
+            fig2 = px.pie(pdf, names="Sex", title="Distribución por género")
+            fig2.show()
+
+            # 3️⃣ Promedio de edad por clase
+            df_age = pdf.groupby("Pclass")["Age"].mean().reset_index()
+            df_age["Age"] = df_age["Age"].round(1)
+            fig3 = px.bar(df_age, x="Pclass", y="Age", title="Promedio de edad por clase")
+            fig3.show()
+        time.sleep(10)  # actualizar cada 10 segundos
+
+# Ejecutar los gráficos en un hilo separado
+thread = threading.Thread(target=plot_realtime, daemon=True)
+thread.start()
+
+# -------------------------------
+# Mantener Spark Streaming activo y mostrar tabla en consola
+# -------------------------------
+query = df_parsed.writeStream \
+    .outputMode("append") \
+    .format("console") \
+    .start()
+
+query.awaitTermination()
