@@ -1,0 +1,72 @@
+Este código implementa un sistema de análisis de datos en tiempo real (streaming) del dataset del Titanic, usando Kafka y PySpark Streaming.
+En otras palabras, simula que los datos del Titanic se van enviando uno por uno como si fueran eventos en vivo, y Spark los analiza conforme llegan.
+ste sistema combina Kafka y Spark para procesar el dataset del Titanic como si fueran datos en vivo, calculando estadísticas instantáneas (como tasas de supervivencia o promedios de edad) mientras los registros fluyen.
+
+from kafka import KafkaProducer
+import time
+import csv
+
+# Configurar productor Kafka
+producer = KafkaProducer(bootstrap_servers='localhost:9092')
+
+# Ruta del dataset
+data_path = '/media/sf_titanic_py/train.csv'
+
+# Enviar cada registro al topic
+with open(data_path, 'r') as file:
+    reader = csv.DictReader(file)
+    for row in reader:
+        message = str(row).encode('utf-8')
+        producer.send('titanic_stream', message)
+        print(f"📤 Enviado: {row}")
+        time.sleep(1)  # 1 segundo entre cada registro
+
+producer.close()
+
+
+nano spark_streaming_analysis.py
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, from_json, schema_of_json
+
+# Crear sesión Spark con soporte Kafka
+spark = SparkSession.builder \
+    .appName("TitanicStreamingAnalysis") \
+    .getOrCreate()
+
+# Leer datos desde Kafka
+df_stream = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "localhost:9092") \
+    .option("subscribe", "titanic_stream") \
+    .load()
+
+# Convertir value a string
+df_string = df_stream.selectExpr("CAST(value AS STRING) as json_str")
+
+# Inferir esquema del JSON
+example_json = """{"PassengerId": "1", "Survived": "0", "Pclass": "3", "Name": "Braund, Mr. Owen Harris", "Sex": "male", "Age": "22", "SibSp": "1", "Parch": "0", "Ticket": "A/5 21171", "Fare": "7.25", "Cabin": "", "Embarked": "S"}"""
+schema = schema_of_json(example_json)
+
+# Convertir string JSON a columnas
+df_parsed = df_string.select(from_json(col("json_str"), schema).alias("data")).select("data.*")
+
+# Convertir columnas necesarias a tipos correctos
+df_parsed = df_parsed.withColumn("Survived", col("Survived").cast("integer")) \
+                     .withColumn("Age", col("Age").cast("double"))
+
+# Contar sobrevivientes y fallecidos en tiempo real
+survivor_count = df_parsed.groupBy("Survived").count()
+
+# Contar hombres y mujeres
+gender_count = df_parsed.groupBy("Sex").count()
+
+# Promedio de edad por clase
+age_avg_class = df_parsed.groupBy("Pclass").avg("Age")
+
+# Mostrar resultados en consola
+query1 = survivor_count.writeStream.outputMode("complete").format("console").start()
+query2 = gender_count.writeStream.outputMode("complete").format("console").start()
+query3 = age_avg_class.writeStream.outputMode("complete").format("console").start()
+
+query1.awaitTermination()
